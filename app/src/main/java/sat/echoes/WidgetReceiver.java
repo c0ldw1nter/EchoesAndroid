@@ -19,10 +19,7 @@ import java.util.Random;
  */
 
 public class WidgetReceiver extends AppWidgetProvider {
-    private static WeakReference<Activity> mainEchoRef;
-    public static void updateActivity(Activity activity) {
-        mainEchoRef = new WeakReference<Activity>(activity);
-    }
+
     private static final String ACTION_CLICK_PLAY = "ACTION_CLICK_PLAY";
     private static final String ACTION_CLICK_NEXT = "ACTION_CLICK_NEXT";
     private static final String ACTION_CLICK_PREV = "ACTION_CLICK_PREV";
@@ -76,21 +73,24 @@ public class WidgetReceiver extends AppWidgetProvider {
         }
     }
 
-    void UpdateComponents(RemoteViews rv) {
-        MainEcho me=((MainEcho)mainEchoRef.get());
-        if(me.Playing()) rv.setImageViewResource(R.id.WidgetPlayButton, R.drawable.pause);
-        else rv.setImageViewResource(R.id.WidgetPlayButton, R.drawable.play);
-        if(me.nowPlaying!=null) {
-            rv.setTextViewText(R.id.WidgetTitleText, me.nowPlaying.title);
-            rv.setTextViewText(R.id.WidgetArtistText, me.nowPlaying.artist);
-        }else if(me.playlist!=null && me.playlist.size()>0) {
-            rv.setTextViewText(R.id.WidgetTitleText, me.playlist.get(0).title);
-            rv.setTextViewText(R.id.WidgetArtistText, me.playlist.get(0).artist);
-        }else {
-            rv.setTextViewText(R.id.WidgetTitleText, "");
-            rv.setTextViewText(R.id.WidgetArtistText, "");
-        }
+    public static void UpdateComponents(RemoteViews rv) {
+        try {
+            //MainEcho me = ((MainEcho) Utils.mainEchoRef.get());
+            if (EchoService.Playing()) rv.setImageViewResource(R.id.WidgetPlayButton, R.drawable.pause);
+            else rv.setImageViewResource(R.id.WidgetPlayButton, R.drawable.play);
+            if (EchoService.nowPlaying != null) {
+                rv.setTextViewText(R.id.WidgetTitleText, EchoService.nowPlaying.title);
+                rv.setTextViewText(R.id.WidgetArtistText, EchoService.nowPlaying.artist);
+            } else if (EchoService.playlist != null && EchoService.playlist.size() > 0) {
+                rv.setTextViewText(R.id.WidgetTitleText, EchoService.playlist.get(0).title);
+                rv.setTextViewText(R.id.WidgetArtistText, EchoService.playlist.get(0).artist);
+            } else {
+                rv.setTextViewText(R.id.WidgetTitleText, "");
+                rv.setTextViewText(R.id.WidgetArtistText, "");
+            }
+        }catch (Exception e) {
 
+        }
     }
 
     void ForceUpdate(Context context) {
@@ -103,16 +103,20 @@ public class WidgetReceiver extends AppWidgetProvider {
     }
 
     @Override
-    public void onReceive(Context context, Intent intent){
+    public void onReceive(Context context, Intent intent) {
         super.onReceive(context, intent);
-        MainEcho me=(MainEcho)mainEchoRef.get();
-        if (intent.getAction().equals(ACTION_CLICK_PLAY)) {
-            me.PlayPause();
-        }else if(intent.getAction().equals(ACTION_CLICK_NEXT)) {
-            me.Advance();
-        }else if(intent.getAction().equals(ACTION_CLICK_PREV)){
-            me.Previous();
-        }
-        ForceUpdate(context);
+        try {
+            Intent tent=new Intent(context, EchoService.class);
+            if (intent.getAction().equals(ACTION_CLICK_PLAY)) {
+                tent.setAction(EchoService.ACTION_PLAY);
+            } else if (intent.getAction().equals(ACTION_CLICK_NEXT)) {
+                tent.setAction(EchoService.ACTION_NEXT);
+            } else if (intent.getAction().equals(ACTION_CLICK_PREV)) {
+                tent.setAction(EchoService.ACTION_PREV);
+            }
+            context.startService(tent);
+            Log.d("SUPERTAG", "Widget clicked\n"+context.getPackageName());
+            //ForceUpdate(context);
+        }catch(Exception e) {}
     }
 }

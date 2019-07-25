@@ -1,49 +1,68 @@
 package sat.echoes;
 
-import android.os.Environment;
+import android.Manifest;
+import android.app.AlertDialog;
+import android.content.DialogInterface;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.os.Build;
+import android.os.Handler;
+import android.support.v4.app.ActivityCompat;
+import android.support.v4.content.ContextCompat;
 import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
 import com.un4seen.bass.BASS;
-import java.io.File;
 
+import android.util.Log;
 import android.view.View;
+import android.webkit.MimeTypeMap;
 import android.widget.AdapterView;
-import android.widget.Button;
 import android.widget.ImageButton;
 import android.widget.ListView;
+import android.widget.SeekBar;
 import android.widget.TextView;
 import android.net.Uri;
 import android.provider.MediaStore;
 import android.database.Cursor;
-import android.util.Log;
-import java.lang.reflect.Field;
+
+import java.sql.Date;
+import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Map;
-import java.util.Scanner;
-import java.util.HashMap;
+import java.util.Comparator;
 import java.util.List;
-import java.io.FilenameFilter;
-import android.content.ContentResolver;
-import android.view.Window;
-import android.view.WindowManager;
-import android.widget.ArrayAdapter;
+import java.util.Random;
 
-import android.content.pm.PackageManager;
+import android.content.ContentResolver;
 
 public class MainEcho extends AppCompatActivity {
-    int stream;
-    int nowPlayingIndex=0;
-    boolean streamLoaded=false;
-    public List<String> supportedAudioTypes = Arrays.asList( "mp3", "mp2", "mp1", "wav", "ogg", "m4a" ) ;
-    public List<Track> playlist;
-    public String[] fileList;
-    public Track nowPlaying;
+    public Handler handler;
+    public int seekBarPoints=1000;
+    public boolean seekBarPressed=false;
+    Random rng=new Random();
+
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+
         super.onCreate(savedInstanceState);
-        WidgetReceiver.updateActivity(this);
+
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED ||
+                ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.READ_EXTERNAL_STORAGE, Manifest.permission.WRITE_EXTERNAL_STORAGE}, 0);
+        }else {
+            StartupProcedure();
+        }
+
+    }
+
+    void StartupProcedure() {
+        Utils.updateActivity(this);
+
+        Utils.startService(this);
+
+        handler = new Handler();
+        handler.postDelayed(runnable, 100);
 
         //this.getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
         setContentView(R.layout.activity_main_echo);
@@ -52,20 +71,39 @@ public class MainEcho extends AppCompatActivity {
         (findViewById(R.id.PlayButton)).setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                if(!streamLoaded) LoadAudioFile(playlist.get(nowPlayingIndex));
-                PlayPause();
+                Intent intent=new Intent(MainEcho.this, EchoService.class);
+                intent.setAction(EchoService.ACTION_PLAY);
+                startService(intent);
+                /*if(!EchoService.streamLoaded) LoadAudioFile(EchoService.playlist.get(EchoService.nowPlayingIndex));
+                PlayPause();*/
             }
         });
         (findViewById(R.id.NextTrackButton)).setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                Advance();
+                Intent intent=new Intent(MainEcho.this, EchoService.class);
+                intent.setAction(EchoService.ACTION_NEXT);
+                startService(intent);
             }
         });
         (findViewById(R.id.PrevTrackButton)).setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                Previous();
+                Intent intent=new Intent(MainEcho.this, EchoService.class);
+                intent.setAction(EchoService.ACTION_PREV);
+                startService(intent);
+            }
+        });
+        (findViewById(R.id.ShuffleButton)).setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                Shuffle();
+            }
+        });
+        (findViewById(R.id.ListButton)).setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                OpenPlaylistsWindow();
             }
         });
 
@@ -75,22 +113,100 @@ public class MainEcho extends AppCompatActivity {
             @Override
             public void onItemClick(AdapterView<?> parent, View view, int position, long id) {
                 Track t = (Track) parent.getItemAtPosition(position);
-                LoadAudioFile(t);
-                Play();
+
+                /*for(int i=0;i<parent.getChildCount();i++) {
+                    parent.getChildAt(i).setBackgroundColor(0xFF181818);
+                }
+                view.setBackgroundColor(0x4496e6ff);*/
+                t.getTags();
+                Intent intent=new Intent(MainEcho.this, EchoService.class);
+                intent.putExtra("Track",t);
+                intent.putExtra("Play",true);
+                intent.setAction(EchoService.ACTION_PLAYFILE);
+                startService(intent);
+                /*LoadAudioFile(t);
+                Play();*/
             }
         });
-        GetAllFiles();
 
+        SeekBar sb=(SeekBar)findViewById(R.id.seekBar);
+        sb.setMax(seekBarPoints);
+        sb.setProgress(0);
+        sb.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                if(seekBarPressed) SetPositionPercentage((float)progress/ (float)seekBar.getMax());
+                UpdateTime();
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar seekBar) {
+                seekBarPressed=true;
+            }
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {
+                seekBarPressed=false;
+            }
+        });
+
+        EchoService.playlists=Utils.GetAllPlaylists(this);
+        //EchoService.playlist=Utils.GetAllTracks(this);
+        RefreshPlaylistGrid();
+        RefreshPlayIcon();
+        Utils.updateMainEchoCenterText();
     }
 
-    public boolean Playing() {
-        return BASS.BASS_ChannelIsActive(stream) == BASS.BASS_ACTIVE_PLAYING;
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        if(grantResults[0]==0) StartupProcedure();
+        else {
+            finish();
+        }
     }
 
-    void RefreshPlaylistGrid() {
+    private Runnable runnable = new Runnable() {
+        @Override
+        public void run() {
+            if(EchoService.Playing() && !seekBarPressed) {
+                SeekBar sb=(SeekBar)findViewById(R.id.seekBar);
+                sb.setProgress(GetPlayPercentage());
+                UpdateTime();
+            }
+            handler.postDelayed(this, 100);
+        }
+    };
+
+    void UpdateTime() {
+        TextView tv=(TextView) findViewById(R.id.timeView);
+        String txt="";
+        if(!EchoService.streamLoaded) txt="00:00";
+        else txt= new SimpleDateFormat("mm:ss").format(new Date((long)(BASS.BASS_ChannelBytes2Seconds(EchoService.stream,BASS.BASS_ChannelGetPosition(EchoService.stream,0))*1000)));
+        tv.setText(txt);
+    }
+
+    public void ShowInfo() {
+        AlertDialog.Builder infobuilder;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            infobuilder = new AlertDialog.Builder(MainEcho.this, android.R.style.Theme_Material_Dialog_Alert);
+        } else {
+            infobuilder = new AlertDialog.Builder(MainEcho.this);
+        }
+        infobuilder.setTitle("Autorius")
+                .setMessage("Viktoras Lukšas\nKVK I 12-2")
+                .setNeutralButton(android.R.string.ok, new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface dialog, int which) {
+                        // continue with delete
+                    }
+                }).show();
+    }
+
+    public void RefreshPlaylistGrid() {
         try {
             ListView lstView = (ListView) findViewById(R.id.TrackList);
-            lstView.setAdapter(new TrackAdapter(this, R.layout.tracklist_row, playlist));
+            lstView.setAdapter(new TrackAdapter(this, R.layout.tracklist_row, EchoService.playlist));
+            TextView tv=(TextView)findViewById(R.id.totalTracksTxt);
+            tv.setText(EchoService.playlist.size()+" tracks");
         }catch (Exception e) {
 
         }
@@ -98,120 +214,42 @@ public class MainEcho extends AppCompatActivity {
 
     void RefreshPlayIcon() {
         ImageButton playBtn=(ImageButton)findViewById(R.id.PlayButton);
-        if(Playing()) playBtn.setImageResource(R.drawable.pause);
+        if(EchoService.Playing()) playBtn.setImageResource(R.drawable.pause);
         else playBtn.setImageResource(R.drawable.play);
-    }
-
-    void GetAllFiles() {
-        playlist=new ArrayList<>();
-        ContentResolver cr = getContentResolver();
-        Uri uri = MediaStore.Audio.Media.EXTERNAL_CONTENT_URI;
-        String selection = MediaStore.Audio.Media.IS_MUSIC + "!= 0";
-        String sortOrder = MediaStore.Audio.Media.TITLE + " ASC";
-        Cursor cur = cr.query(uri, null, selection, null, sortOrder);
-        int count;
-        if(cur != null)
-        {
-            count = cur.getCount();
-            if(count > 0)
-            {
-                while(cur.moveToNext())
-                {
-                    String data = cur.getString(cur.getColumnIndex(MediaStore.Audio.Media.DATA));
-                    Track t=new Track(data, cur.getString(cur.getColumnIndex(MediaStore.Audio.Media.TITLE)));
-                    t.artist=cur.getString(cur.getColumnIndex(MediaStore.Audio.Media.ARTIST));
-                    t.album=cur.getString(cur.getColumnIndex(MediaStore.Audio.Media.ALBUM));
-                    t.length=cur.getLong(cur.getColumnIndex(MediaStore.Audio.Media.DURATION));
-                    playlist.add(t);
-                }
-            }
-        }
-        //SetCenterText(trackList.size()+"");
-        fileList=new String[playlist.size()];
-        for(int i=0;i<playlist.size();i++) {
-            fileList[i]=playlist.get(i).filename;
-        }
-        cur.close();
-        RefreshPlaylistGrid();
-    }
-
-    boolean checkWriteExternalPermission()
-    {
-        String permission = "android.permission.READ_EXTERNAL_STORAGE";
-        int res = MainEcho.this.getBaseContext().checkCallingOrSelfPermission(permission);
-        return (res == PackageManager.PERMISSION_GRANTED);
-    }
-
-    void InitSoundDevice() {
-        BASS.BASS_Init(-1, 44100, BASS.BASS_DEVICE_DEFAULT);
     }
 
     void SetCenterText(String text) {
         TextView textThing = (TextView) findViewById(R.id.textThingy);
         textThing.setText(text);
     }
-    void AddCenterText(String text) {
-        TextView textThing = (TextView) findViewById(R.id.textThingy);
-        textThing.setText(textThing.getText()+text);
+
+    void OpenPlaylistsWindow() {
+        startActivity(new Intent(this, PlaylistActivity.class));
     }
 
-    void LoadAudioFile(Track t) {
-        if (streamLoaded) BASS.BASS_ChannelStop(stream);
-        BASS.BASS_Free();
-        InitSoundDevice();
-        if(supportedAudioTypes.indexOf(GetExtension(t.filename))==-1) {
-            SetCenterText("File type unsupported");
-            return;
+
+
+    void SetPositionPercentage(float pct) {
+        if(!EchoService.streamLoaded) return;
+        //SeekBar sb=(SeekBar)findViewById(R.id.seekBar);
+        BASS.BASS_ChannelSetPosition(EchoService.stream, (int)(BASS.BASS_ChannelGetLength(EchoService.stream,0)*pct),0);
+        //sb.setProgress((int)(sb.getMax()*pct));
+    }
+
+    int GetPlayPercentage() {
+        if(!EchoService.Playing()) return 0;
+        float pct=(float)BASS.BASS_ChannelGetPosition(EchoService.stream, 0)/ (float)BASS.BASS_ChannelGetLength(EchoService.stream, 0);
+        pct*=seekBarPoints;
+        return (int)pct;
+    }
+
+    void Shuffle() {
+        ArrayList<Track> newPlist=new ArrayList<>();
+        while(EchoService.playlist.size()>0) {
+            newPlist.add(EchoService.playlist.remove(rng.nextInt(EchoService.playlist.size())));
         }
-        stream = BASS.BASS_StreamCreateFile(t.filename, 0, 0, BASS.BASS_DEVICE_DEFAULT);
-        if(BASS.BASS_ErrorGetCode()!=0) {
-            return;
-        }
-        streamLoaded=true;
-        SetCenterText(t.toString());
-        nowPlaying=t;
+        EchoService.playlist=newPlist;
+        RefreshPlaylistGrid();
     }
 
-    void PlayPause() {
-        if(Playing()) {
-            Pause();
-        }else {
-            Play();
-        }
-    }
-
-    void Play() {
-        if (streamLoaded && !Playing()) BASS.BASS_ChannelPlay(stream, false);
-        else if(!streamLoaded && playlist!=null && playlist.size()>0) LoadAudioFile(playlist.get(0));
-        RefreshPlayIcon();
-    }
-
-    void Pause() {
-        if (Playing()) BASS.BASS_ChannelPause(stream);
-        RefreshPlayIcon();
-    }
-
-    void Advance() {
-        nowPlayingIndex++;
-        if(nowPlayingIndex>playlist.size()-1) nowPlayingIndex=0;
-        LoadAudioFile(playlist.get(nowPlayingIndex));
-        Play();
-    }
-
-    void Previous() {
-        nowPlayingIndex--;
-        if(nowPlayingIndex<0) nowPlayingIndex=playlist.size()-1;
-        LoadAudioFile(playlist.get(nowPlayingIndex));
-        Play();
-    }
-
-    public static String GetExtension(String filePath) {
-        String extension = "";
-
-        int i = filePath.lastIndexOf('.');
-        if (i > 0) {
-            extension = filePath.substring(i+1);
-        }
-        return extension;
-    }
 }
